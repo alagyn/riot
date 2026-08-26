@@ -1,0 +1,24 @@
+[package]
+name = "riot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = {version = "0.13.4", features = ["json"]}
+serde = {version = "1.0.228", features = ["derive"]}
+serde_json = "1.0.150"
+tokio = {version = "1.52.3", features = ["rt-multi-thread"]}
+axum = {version = "0.8.9", default-features = false, features = ["http1", "http2",  "json", "tokio"]}
+chrono = "0.4.45"
+
+[lib]
+name = "riot"
+path = "src/riot.rs"
+
+[[bin]]
+name = "riotd"
+path = "src/bin/riotd.rs"
+
+[[bin]]
+name = "riotctl"
+path = "src/bin/riotctl.rs"
