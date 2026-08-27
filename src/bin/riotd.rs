@@ -5,9 +5,8 @@ use std::time::SystemTime;
 use axum::extract::State;
 use axum::{Json, Router, extract::Request, http::StatusCode, middleware::Next, routing::get};
 use chrono::{DateTime, Utc};
+use riot;
 use riot::Riot;
-
-const VERSION: &'static str = "v0.1.0";
 
 #[tokio::main]
 async fn main() {
@@ -56,7 +55,7 @@ async fn request_logger(request: Request, next: Next) -> axum::response::Respons
 }
 
 async fn get_version(State(_): State<Arc<RwLock<Riot>>>) -> Json<&'static str> {
-    Json::from(VERSION)
+    Json::from(riot::VERSION)
 }
 
 async fn get_services(State(state): State<Arc<RwLock<Riot>>>) -> (StatusCode, Json<Vec<String>>) {

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 pub mod service;
 
+pub const VERSION: &'static str = "v0.1.0";
+
 pub struct Riot {
     pub svdir: PathBuf,
     pub staging_dir: PathBuf,
