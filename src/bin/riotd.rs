@@ -1,15 +1,31 @@
 use std::env;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::net::SocketAddr;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use axum::extract::State;
+use axum::Extension;
+use axum::body::Bytes;
+use axum::extract::{Path, State};
+use axum::routing::post;
 use axum::{Json, Router, extract::Request, http::StatusCode, middleware::Next, routing::get};
-use chrono::{DateTime, Utc};
+
+use axum_server::tls_rustls::RustlsAcceptor;
+use axum_server_mtls::{MtlsAcceptor, PeerCertificates};
+use chrono::{DateTime, Local};
 use riot;
 use riot::Riot;
+use riot::auth::get_tls_config;
+use riot::responses::ServiceList;
+
+type RiotState = State<Arc<RwLock<Riot>>>;
 
 #[tokio::main]
 async fn main() {
+    // Load configs
     let svdir: String = match env::var("SVDIR") {
         Ok(val) => val,
         Err(_) => panic!("Set $SVDIR"),
@@ -20,52 +36,161 @@ async fn main() {
         Err(_) => String::from(".riot"),
     };
 
-    let state = Arc::new(RwLock::new(Riot::new(svdir.into(), staging_dir.into())));
+    let server_name = match env::var("RIOT_SERVERNAME") {
+        Ok(val) => val,
+        Err(_) => String::from("localhost"),
+    };
 
+    let server_port: u16 = match env::var("RIOT_SERVERPORT") {
+        Ok(val) => val.parse().unwrap(),
+        Err(_) => 443,
+    };
+
+    // Init state
+    let riot = match Riot::new(svdir.into(), staging_dir.into()) {
+        Ok(x) => x,
+        Err(msg) => panic!("{}", msg),
+    };
+
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() > 1 {
+        if args[1] == "--make-client" {
+            if args.len() != 3 {
+                println!("Usage: riotd --make-client [output.json]");
+                return;
+            }
+
+            let output = args[2].clone();
+            riot::auth::gnerate_client_config(
+                &riot.config_dir,
+                &server_name,
+                &server_port,
+                PathBuf::from(&output),
+            )
+            .await;
+            println!("Generated new client config {}", output);
+            return;
+        }
+    }
+
+    let tls_cfg = get_tls_config(&riot.config_dir, &server_name).await;
+    let state = Arc::new(RwLock::new(riot));
+
+    // Init router
     let app = Router::new()
         .route("/", get(get_version))
+        .route("/services", get(get_services))
         .route(
-            "/services",
-            get(get_services).post(post_service).delete(del_service),
+            "/services/{service_name}",
+            post(post_service).delete(del_service),
         )
+        // .layer(axum::middleware::from_fn(auth_verify))
         .layer(axum::middleware::from_fn(request_logger))
         .with_state(state);
 
     // TODO configurable interface and port
-    let binding = "0.0.0.0:3000";
-    println!("Listening on {}", &binding);
-    let listener = tokio::net::TcpListener::bind(binding).await.unwrap();
-    let _ = axum::serve(listener, app).await;
+    let addr = SocketAddr::from(([0, 0, 0, 0], server_port));
+    let acceptor = MtlsAcceptor::new(RustlsAcceptor::new(tls_cfg));
+
+    println!("Listening on {}", &addr);
+    axum_server::bind(addr)
+        .acceptor(acceptor)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }
 
 async fn request_logger(request: Request, next: Next) -> axum::response::Response {
     // dbg!(&request);
     let now = SystemTime::now();
-    let now: DateTime<Utc> = now.into();
-    let now = now.to_rfc3339();
+    let now: DateTime<Local> = now.into();
+    let now = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-    println!(
+    let log = format!(
         "[{}] {} {} {:?}",
         now,
         &request.method(),
         &request.uri(),
         &request.version()
     );
-    next.run(request).await
+    let res = next.run(request).await;
+    println!("{} -> ({})", log, res.status());
+    res
 }
 
-async fn get_version(State(_): State<Arc<RwLock<Riot>>>) -> Json<&'static str> {
+async fn auth_verify(request: Request, next: Next) -> axum::response::Response {
+    if let Some(certs) = request.extensions().get::<PeerCertificates>()
+        && certs.is_present()
+    {
+        next.run(request).await
+    } else {
+        axum::response::Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+}
+
+async fn get_version(State(_): RiotState) -> Json<&'static str> {
     Json::from(riot::VERSION)
 }
 
-async fn get_services(State(state): State<Arc<RwLock<Riot>>>) -> (StatusCode, Json<Vec<String>>) {
+async fn get_services(State(state): RiotState) -> (StatusCode, Json<ServiceList>) {
     let lock = state.clone();
     let riot = lock.read().unwrap();
-    let out = riot.services.clone();
-
+    let out = riot.list_services();
     (StatusCode::OK, Json::from(out))
 }
 
-async fn post_service() {}
+async fn post_service(
+    State(state): RiotState,
+    Path(service_name): Path<String>,
+    body: Bytes,
+) -> (StatusCode, String) {
+    let lock = state.clone();
+    let riot = lock.write().unwrap();
+
+    // TODO check if we are already tracking service and it is enabled
+    // if so, we should restart the service
+
+    // TODO check if there is a service with the same name already
+    // in the svdir, but not one we are tracking. Should Error
+
+    let install_dir = riot.install_dir.clone().join(service_name);
+    if !install_dir.is_dir() {
+        if install_dir.is_file() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                String::from("Cannot create service direcotry, a file with the same name exists"),
+            );
+        }
+
+        match std::fs::create_dir(&install_dir) {
+            Ok(_) => (),
+            Err(msg) => return (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
+        }
+    }
+
+    let run_script = install_dir.clone().join("run");
+
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o744)
+        .open(run_script);
+    let mut file = match file {
+        Ok(x) => x,
+        Err(msg) => return (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
+    };
+
+    match file.write_all(body.iter().as_slice()) {
+        Ok(_) => (),
+        Err(msg) => return (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
+    };
+
+    (StatusCode::CREATED, String::from(""))
+}
 
 async fn del_service() {}

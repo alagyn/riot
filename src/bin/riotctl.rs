@@ -1,8 +1,11 @@
+use std::error::Error;
 use std::{env, path::PathBuf};
 
 use riot;
+use riot::auth::load_riotctl_config;
+use riot::responses::ServiceList;
 
-type CmdFunc = fn(&str, &[String]) -> ();
+type CmdFunc = fn(&str, reqwest::blocking::Client, &[String]) -> ();
 
 struct Command {
     name: &'static str,
@@ -58,12 +61,54 @@ fn main() {
         return;
     }
 
-    // TODO load from config
-    let base_url = "http://localhost:3000";
+    // TODO load from env var?
+
+    let config_file: PathBuf;
+
+    if let Ok(path) = env::var("RIOT_CONFIG") {
+        config_file = path.into();
+    } else {
+        config_file = match env::consts::OS {
+            "linux" => match env::var("HOME") {
+                Ok(val) => PathBuf::from(val)
+                    .join(".config")
+                    .join("bdd")
+                    .join("riot")
+                    .join("riot.json"),
+                Err(_) => "riot.json".into(),
+            },
+            "windows" => match env::var("APPDATA") {
+                Ok(val) => PathBuf::from(val)
+                    .join("bdd")
+                    .join("riot")
+                    .join("riot.json"),
+                Err(_) => "riot.json".into(),
+            },
+            _ => "riot.json".into(),
+        }
+    }
+
+    let config = match load_riotctl_config(&config_file) {
+        Ok(x) => x,
+        Err(msg) => {
+            println!("Error loading config: {}", msg);
+            return;
+        }
+    };
+
+    let base_url = String::from("https://") + &config.server_name;
+
+    let client = reqwest::blocking::Client::builder()
+        .tls_certs_only(reqwest::Certificate::from_pem(
+            &config.server_cert.into_bytes(),
+        ))
+        .identity(reqwest::Identity::from_pem(&config.client_key.into_bytes()).unwrap())
+        .build()
+        .unwrap();
 
     for cmd in &cmds {
         if cmd.name == args[1] {
-            (cmd.func)(base_url, &args[2..]);
+            (cmd.func)(base_url.as_str(), client, &args[2..]);
             return;
         }
     }
@@ -71,30 +116,47 @@ fn main() {
     usage(&cmds);
 }
 
-fn send_service(base_url: &str, args: &[String]) {
+// fn check_unauthorized(
+//     res: reqwest::Result<reqwest::Response>,
+// ) -> Result<reqwest::Response, String> {
+//     match res {
+//         Ok(res) => Ok(res),
+//         Err(err) => {
+//             if err.is_request() {
+//                 if let Some(source) = err.source() {
+//                     let source = source.downcast_ref::<reqwest::Error>().unwrap();
+//                 }
+//             } else {
+//                 Err(format!("{:?}", err))
+//             }
+//         }
+//     }
+// }
+
+fn send_service(base_url: &str, client: reqwest::blocking::Client, args: &[String]) {
     if args.len() != 1 {
         println!("USAGE:");
         println!("riotctl push [service.sh]");
         return;
     }
 
-    let service_file: PathBuf = args[1].clone().into();
+    let service_file: PathBuf = args[0].clone().into();
     if !service_file.is_file() {
         println!("{} is not a file", &service_file.to_str().unwrap());
         return;
     }
 
-    let body = std::fs::read(service_file).expect("Failed to read service file");
-    let endpoint = String::from(base_url) + "/services";
+    let body = std::fs::read(&service_file).expect("Failed to read service file");
+    let endpoint =
+        String::from(base_url) + "/services/" + service_file.file_stem().unwrap().to_str().unwrap();
 
-    let client = reqwest::blocking::Client::new();
     let res = client
         .post(endpoint)
         .body(body)
         .send()
         .expect("Failed to push service");
 
-    if res.status() != reqwest::StatusCode::OK {
+    if res.status() != reqwest::StatusCode::CREATED {
         panic!("Failed to push service {}", res.text().unwrap());
     }
 
@@ -102,29 +164,35 @@ fn send_service(base_url: &str, args: &[String]) {
     println!("Created");
 }
 
-fn list_services(base_url: &str, _args: &[String]) {
+fn list_services(base_url: &str, client: reqwest::blocking::Client, _args: &[String]) {
     let endpoint = String::from(base_url) + "/services";
 
-    let res = reqwest::blocking::get(endpoint).expect("Failed to list services");
+    let res = match client.get(endpoint).send() {
+        Ok(res) => res,
+        Err(msg) => {
+            println!("Failed to list services {:?}", msg);
+            return;
+        }
+    };
+
     if res.status() != reqwest::StatusCode::OK {
         // TODO?
         println!("Failed to list services");
         return;
     }
 
-    // TODO this should probably print out the statuses?
-    let services: Vec<String> = res.json().unwrap();
-    if !services.is_empty() {
+    let services: ServiceList = res.json().unwrap();
+    if !services.services.is_empty() {
         println!("Services:");
-        for x in services {
-            println!("{}", x);
+        for x in services.services {
+            println!("{:?}", x);
         }
     } else {
         println!("No Services Installed");
     }
 }
 
-fn rm_service(base_url: &str, args: &[String]) {
+fn rm_service(base_url: &str, client: reqwest::blocking::Client, args: &[String]) {
     if args.len() != 1 {
         println!("USAGE:");
         println!("riotctl rm [service]");
@@ -132,7 +200,6 @@ fn rm_service(base_url: &str, args: &[String]) {
 
     let endpoint = String::from(base_url) + "/services/" + &args[1];
 
-    let client = reqwest::blocking::Client::new();
     let res = client
         .delete(endpoint)
         .send()
