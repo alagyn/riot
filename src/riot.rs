@@ -59,36 +59,11 @@ impl Riot {
     }
 
     pub fn list_services(&self) -> responses::ServiceList {
-        let _out_services: Vec<ServiceStatusRes> = self
-            .services
-            .iter()
-            .map(|x| self.get_service_status(x))
-            .collect();
+        let _out_services: Vec<ServiceStatusRes> =
+            self.services.iter().map(|x| x.check_status()).collect();
 
         responses::ServiceList {
             services: _out_services,
-        }
-    }
-
-    pub fn get_service_status(&self, service: &Service) -> responses::ServiceStatusRes {
-        let status;
-        if service.enabled {
-            match service.check_status() {
-                Ok(s) => status = s,
-                Err(msg) => {
-                    println!("Unable to parse service status: {}", msg);
-                    status = ServiceStatus::Unknown;
-                }
-            }
-        } else {
-            status = ServiceStatus::Unknown;
-        }
-
-        ServiceStatusRes {
-            name: service.name.clone(),
-            uptime: String::from("TODO"),
-            enabled: service.enabled,
-            status: status,
         }
     }
 }

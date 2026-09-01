@@ -187,6 +187,9 @@ async fn post_service(
 
 async fn del_service() {
     // TODO
+    // Delete a service, should probably warn users if there are any files left over in the
+    // staging folder
+    panic!("unimplemented")
 }
 
 async fn manage_service(
@@ -205,10 +208,17 @@ async fn manage_service(
         None => return (StatusCode::NOT_FOUND, Json::from(None)),
     };
 
-    // TODO
+    let status = match status.as_str() {
+        "up" => service.start(),
+        "down" => service.stop(),
+        _ => return (StatusCode::BAD_REQUEST, Json::from(None)),
+    };
 
-    (
-        StatusCode::OK,
-        Json::from(Some(riot.get_service_status(service))),
-    )
+    match status {
+        Ok(status) => (StatusCode::OK, Json::from(Some(status))),
+        Err(msg) => {
+            println!("Failed to updated service: {}", msg);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json::from(None))
+        }
+    }
 }

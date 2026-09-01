@@ -9,9 +9,10 @@ static STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
 ).unwrap()
 });
 
+use crate::responses::ServiceStatusRes;
 use crate::service::ServiceStatus;
 
-pub fn get_status(service: &str) -> Result<ServiceStatus, String> {
+pub fn get_status(service: &str) -> Result<ServiceStatusRes, String> {
     let args: Vec<String> = vec![String::from("status"), service.to_string()];
 
     let output = match process::Command::new("sv").args(args).output() {
@@ -23,9 +24,11 @@ pub fn get_status(service: &str) -> Result<ServiceStatus, String> {
         return Err(String::from("Failed to parse sv output"));
     };
 
-    match &m["status"] {
-        "run" => Ok(ServiceStatus::Up),
-        "down" => Ok(ServiceStatus::Down),
-        _ => Ok(ServiceStatus::Unknown),
-    }
+    panic!("unimplemented");
+
+    let status = match &m["status"] {
+        "run" => ServiceStatus::Up,
+        "down" => ServiceStatus::Down,
+        _ => ServiceStatus::Unknown,
+    };
 }
