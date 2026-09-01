@@ -1,20 +1,31 @@
 use std::process;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
-// const STATUS_RE = Regex::new(r"(?P<status>(run)|(down)|(fail)): (?P<name>[/\w-]+):( \(pid (?P<pid>\d+)\))? (?P<runtime>\d+)s(, (?P<info>[\w\s,]+))?");
+static STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+    r"(?P<status>(run)|(down)|(fail)): (?P<name>[/\w-]+):( \(pid (?P<pid>\d+)\))? (?P<runtime>\d+)s(, (?P<info>[\w\s,]+))?",
+).unwrap()
+});
 
 use crate::service::ServiceStatus;
 
 pub fn get_status(service: &str) -> Result<ServiceStatus, String> {
-    let args: Vec<String> = vec![
-        String::from("sv"),
-        String::from("status"),
-        service.to_string(),
-    ];
+    let args: Vec<String> = vec![String::from("status"), service.to_string()];
 
-    match process::Command::new("sv").args(args).output() {
-        Ok(output) => Ok(ServiceStatus::Disabled),
-        Err(msg) => Err(msg.to_string()),
+    let output = match process::Command::new("sv").args(args).output() {
+        Ok(output) => output,
+        Err(msg) => return Err(msg.to_string()),
+    };
+
+    let Some(m) = STATUS_RE.captures(std::str::from_utf8(&output.stdout).unwrap()) else {
+        return Err(String::from("Failed to parse sv output"));
+    };
+
+    match &m["status"] {
+        "run" => Ok(ServiceStatus::Up),
+        "down" => Ok(ServiceStatus::Down),
+        _ => Ok(ServiceStatus::Unknown),
     }
 }

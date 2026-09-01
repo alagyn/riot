@@ -3,11 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::responses::ServiceStatusRes;
+use crate::service::ServiceStatus;
 
 pub mod auth;
 pub mod responses;
 pub mod runit_ctl;
 pub mod service;
+
+use service::Service;
 
 pub const VERSION: &'static str = "v0.1.0";
 
@@ -21,7 +24,7 @@ pub struct Riot {
     // Directory of installed services. Enabled services are symlinked to svdir
     pub install_dir: PathBuf,
     // List of services
-    pub services: Vec<service::Service>,
+    pub services: Vec<Service>,
 }
 
 impl Riot {
@@ -38,12 +41,12 @@ impl Riot {
         let installed_services = list_service_dir(&install_dir);
         let enabled_services: HashSet<String> = list_service_dir(&svdir).iter().cloned().collect();
 
-        let mut services: Vec<service::Service> = Vec::new();
+        let mut services: Vec<Service> = Vec::new();
 
         for name in installed_services {
             let enabled = enabled_services.contains(&name);
 
-            services.push(service::Service { name, enabled });
+            services.push(Service { name, enabled });
         }
 
         Ok(Riot {
@@ -59,16 +62,33 @@ impl Riot {
         let _out_services: Vec<ServiceStatusRes> = self
             .services
             .iter()
-            .map(|x| ServiceStatusRes {
-                name: x.name.clone(),
-                uptime: String::from("TODO"),
-                enabled: x.enabled,
-                status: service::ServiceStatus::Disabled,
-            })
+            .map(|x| self.get_service_status(x))
             .collect();
 
         responses::ServiceList {
             services: _out_services,
+        }
+    }
+
+    pub fn get_service_status(&self, service: &Service) -> responses::ServiceStatusRes {
+        let status;
+        if service.enabled {
+            match service.check_status() {
+                Ok(s) => status = s,
+                Err(msg) => {
+                    println!("Unable to parse service status: {}", msg);
+                    status = ServiceStatus::Unknown;
+                }
+            }
+        } else {
+            status = ServiceStatus::Unknown;
+        }
+
+        ServiceStatusRes {
+            name: service.name.clone(),
+            uptime: String::from("TODO"),
+            enabled: service.enabled,
+            status: status,
         }
     }
 }

@@ -7,19 +7,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::routing::post;
 use axum::{Json, Router, extract::Request, http::StatusCode, middleware::Next, routing::get};
 
 use axum_server::tls_rustls::RustlsAcceptor;
-use axum_server_mtls::{MtlsAcceptor, PeerCertificates};
+use axum_server_mtls::MtlsAcceptor;
 use chrono::{DateTime, Local};
 use riot;
 use riot::Riot;
 use riot::auth::get_tls_config;
-use riot::responses::ServiceList;
+use riot::responses::{ServiceList, ServiceStatusRes};
 
 type RiotState = State<Arc<RwLock<Riot>>>;
 
@@ -85,6 +84,7 @@ async fn main() {
             "/services/{service_name}",
             post(post_service).delete(del_service),
         )
+        .route("/services/{service_name}/{status}", get(manage_service))
         // .layer(axum::middleware::from_fn(auth_verify))
         .layer(axum::middleware::from_fn(request_logger))
         .with_state(state);
@@ -119,19 +119,6 @@ async fn request_logger(request: Request, next: Next) -> axum::response::Respons
     res
 }
 
-async fn auth_verify(request: Request, next: Next) -> axum::response::Response {
-    if let Some(certs) = request.extensions().get::<PeerCertificates>()
-        && certs.is_present()
-    {
-        next.run(request).await
-    } else {
-        axum::response::Response::builder()
-            .status(StatusCode::FORBIDDEN)
-            .body(axum::body::Body::empty())
-            .unwrap()
-    }
-}
-
 async fn get_version(State(_): RiotState) -> Json<&'static str> {
     Json::from(riot::VERSION)
 }
@@ -148,8 +135,9 @@ async fn post_service(
     Path(service_name): Path<String>,
     body: Bytes,
 ) -> (StatusCode, String) {
+    println!("Service posted {}", service_name);
     let lock = state.clone();
-    let riot = lock.write().unwrap();
+    let mut riot = lock.write().unwrap();
 
     // TODO check if we are already tracking service and it is enabled
     // if so, we should restart the service
@@ -157,7 +145,7 @@ async fn post_service(
     // TODO check if there is a service with the same name already
     // in the svdir, but not one we are tracking. Should Error
 
-    let install_dir = riot.install_dir.clone().join(service_name);
+    let install_dir = riot.install_dir.clone().join(&service_name);
     if !install_dir.is_dir() {
         if install_dir.is_file() {
             return (
@@ -190,7 +178,37 @@ async fn post_service(
         Err(msg) => return (StatusCode::INTERNAL_SERVER_ERROR, msg.to_string()),
     };
 
+    riot.services.push(riot::service::Service {
+        name: service_name,
+        enabled: false,
+    });
     (StatusCode::CREATED, String::from(""))
 }
 
-async fn del_service() {}
+async fn del_service() {
+    // TODO
+}
+
+async fn manage_service(
+    State(state): RiotState,
+    Path((service_name, status)): Path<(String, String)>,
+) -> (StatusCode, Json<Option<ServiceStatusRes>>) {
+    println!(
+        "Trying to update service {} to state {}",
+        service_name, status
+    );
+    let lock = state.clone();
+    let riot = lock.write().unwrap();
+
+    let service = match riot.services.iter().find(|x| x.name == service_name) {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json::from(None)),
+    };
+
+    // TODO
+
+    (
+        StatusCode::OK,
+        Json::from(Some(riot.get_service_status(service))),
+    )
+}

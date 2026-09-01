@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::{env, path::PathBuf};
 
 use riot;
@@ -47,6 +46,20 @@ fn main() {
         args: "[service]",
         help: "Stop and remove a service",
         func: rm_service,
+    });
+
+    cmds.push(Command {
+        name: "up",
+        args: "[services...]",
+        help: "Start a service",
+        func: service_up,
+    });
+
+    cmds.push(Command {
+        name: "down",
+        args: "[services...]",
+        help: "Stop a service",
+        func: service_down,
     });
 
     let args: Vec<String> = env::args().collect();
@@ -196,6 +209,7 @@ fn rm_service(base_url: &str, client: reqwest::blocking::Client, args: &[String]
     if args.len() != 1 {
         println!("USAGE:");
         println!("riotctl rm [service]");
+        return;
     }
 
     let endpoint = String::from(base_url) + "/services/" + &args[1];
@@ -205,5 +219,57 @@ fn rm_service(base_url: &str, client: reqwest::blocking::Client, args: &[String]
         .send()
         .expect("Failed to delete service");
 
-    if res.status() != reqwest::StatusCode::OK {}
+    if res.status() != reqwest::StatusCode::OK {
+        // TODO
+    }
+}
+
+fn service_up(base_url: &str, client: reqwest::blocking::Client, args: &[String]) {
+    if args.len() < 1 {
+        println!("USAGE:");
+        println!("riotctl up [services...]");
+        return;
+    }
+
+    for name in args {
+        update_status(base_url, &client, name, "up");
+    }
+}
+
+fn service_down(base_url: &str, client: reqwest::blocking::Client, args: &[String]) {
+    if args.len() < 1 {
+        println!("USAGE:");
+        println!("riotctl down [services...]");
+        return;
+    }
+
+    for name in args {
+        update_status(base_url, &client, name, "down");
+    }
+}
+
+fn update_status(
+    base_url: &str,
+    client: &reqwest::blocking::Client,
+    service: &String,
+    status: &'static str,
+) {
+    let endpoint = String::from(base_url) + "/services/" + &service + "/" + status;
+
+    let res = match client.get(endpoint).send() {
+        Ok(x) => x,
+        Err(err) => {
+            println!("Failed to update status {:?}", err);
+            return;
+        }
+    };
+
+    if res.status() != reqwest::StatusCode::OK {
+        // TODO
+        println!(
+            "Failed to update status, got code {}: {}",
+            res.status(),
+            res.text().unwrap_or_default()
+        );
+    }
 }
