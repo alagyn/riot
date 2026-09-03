@@ -1,3 +1,5 @@
+use std::io::Write;
+use std::path::PathBuf;
 use std::process;
 use std::sync::LazyLock;
 
@@ -9,26 +11,47 @@ static STATUS_RE: LazyLock<Regex> = LazyLock::new(|| {
 ).unwrap()
 });
 
-use crate::responses::ServiceStatusRes;
 use crate::service::ServiceStatus;
 
-pub fn get_status(service: &str) -> Result<ServiceStatusRes, String> {
-    let args: Vec<String> = vec![String::from("status"), service.to_string()];
+pub fn get_status(service_dir: &PathBuf) -> Result<ServiceStatus, String> {
+    let stat_file = service_dir.join("supervise").join("stat");
 
-    let output = match process::Command::new("sv").args(args).output() {
-        Ok(output) => output,
-        Err(msg) => return Err(msg.to_string()),
+    if !stat_file.is_file() {
+        return Err(format!("{} is not a file", stat_file.to_str().unwrap()));
+    }
+
+    let status = match std::fs::read_to_string(&stat_file) {
+        Ok(text) => text,
+        Err(err) => {
+            return Err(format!(
+                "Error reading {}: {}",
+                stat_file.to_str().unwrap(),
+                err.to_string()
+            ));
+        }
     };
 
-    let Some(m) = STATUS_RE.captures(std::str::from_utf8(&output.stdout).unwrap()) else {
-        return Err(String::from("Failed to parse sv output"));
-    };
-
-    panic!("unimplemented");
-
-    let status = match &m["status"] {
+    let status = match status.trim() {
         "run" => ServiceStatus::Up,
         "down" => ServiceStatus::Down,
-        _ => ServiceStatus::Unknown,
+        _ => {
+            println!("Unknown status: '{}'", &status);
+            ServiceStatus::Unknown
+        }
     };
+
+    Ok(status)
+}
+
+pub fn send_signal(service_dir: &PathBuf, signal: u8) {
+    let control_file = service_dir.join("supervise").join("control");
+
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .read(false)
+        .create(false)
+        .open(control_file)
+        .unwrap();
+
+    f.write(&[signal]).unwrap();
 }

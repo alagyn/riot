@@ -29,6 +29,9 @@ pub struct Riot {
 
 impl Riot {
     pub fn new(svdir: PathBuf, staging_dir: PathBuf) -> Result<Riot, String> {
+        let svdir = svdir.canonicalize().unwrap();
+        let staging_dir = staging_dir.canonicalize().unwrap();
+
         ensure_directory_exists(&svdir)?;
         ensure_directory_exists(&staging_dir)?;
 
@@ -59,11 +62,88 @@ impl Riot {
     }
 
     pub fn list_services(&self) -> responses::ServiceList {
-        let _out_services: Vec<ServiceStatusRes> =
-            self.services.iter().map(|x| x.check_status()).collect();
+        let _out_services: Vec<ServiceStatusRes> = self
+            .services
+            .iter()
+            .map(|x| self.check_service_status(x))
+            .collect();
 
         responses::ServiceList {
             services: _out_services,
+        }
+    }
+
+    pub fn check_service_status(&self, service: &Service) -> ServiceStatusRes {
+        if service.enabled {
+            let service_dir = self.get_service_dir(service);
+            match runit_ctl::get_status(&service_dir) {
+                Ok(status) => ServiceStatusRes {
+                    name: service.name.clone(),
+                    uptime: String::from("TODO"),
+                    enabled: service.enabled,
+                    status,
+                },
+                Err(msg) => {
+                    println!(
+                        "Failed to get status for service {}: {}",
+                        &service.name, msg
+                    );
+                    ServiceStatusRes {
+                        name: service.name.clone(),
+                        uptime: String::from("TODO"),
+                        enabled: service.enabled,
+                        status: ServiceStatus::Unknown,
+                    }
+                }
+            }
+        } else {
+            ServiceStatusRes {
+                name: service.name.clone(),
+                uptime: String::from("TODO"),
+                enabled: service.enabled,
+                status: ServiceStatus::Unknown,
+            }
+        }
+    }
+
+    fn get_service_dir(&self, service: &Service) -> PathBuf {
+        self.install_dir.join(&service.name)
+    }
+
+    pub fn start_service(&self, service: &Service) {
+        if !service.enabled {
+            self.enable_service(service).unwrap();
+        } else {
+            println!("Starting service: {}", &service.name);
+            let service_dir = self.get_service_dir(service);
+            runit_ctl::send_signal(&service_dir, b'd');
+        }
+    }
+
+    pub fn stop_service(&self, service: &Service) {
+        println!("Stopping service: {}", &service.name);
+        let service_dir = self.get_service_dir(service);
+        runit_ctl::send_signal(&service_dir, b'u');
+    }
+
+    pub fn enable_service(&self, service: &Service) -> Result<(), String> {
+        println!("Enabling service: {}", &service.name);
+        let link_name = self.svdir.join(&service.name);
+        let service_dir = self.install_dir.join(&service.name);
+
+        match std::os::unix::fs::symlink(service_dir, link_name) {
+            Ok(_) => Ok(()),
+            Err(msg) => Err(msg.to_string()),
+        }
+    }
+
+    pub fn disable_service(&self, service: &Service) -> Result<(), String> {
+        println!("Disabling service: {}", &service.name);
+        let link_name = self.svdir.join(&service.name);
+
+        match std::fs::remove_file(link_name) {
+            Ok(_) => Ok(()),
+            Err(msg) => Err(msg.to_string()),
         }
     }
 }

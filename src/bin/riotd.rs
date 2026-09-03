@@ -208,17 +208,14 @@ async fn manage_service(
         None => return (StatusCode::NOT_FOUND, Json::from(None)),
     };
 
-    let status = match status.as_str() {
-        "up" => service.start(),
-        "down" => service.stop(),
+    match status.as_str() {
+        "up" => riot.start_service(&service),
+        "down" => riot.stop_service(&service),
         _ => return (StatusCode::BAD_REQUEST, Json::from(None)),
-    };
-
-    match status {
-        Ok(status) => (StatusCode::OK, Json::from(Some(status))),
-        Err(msg) => {
-            println!("Failed to updated service: {}", msg);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json::from(None))
-        }
     }
+
+    (
+        StatusCode::OK,
+        Json::from(Some(riot.check_service_status(&service))),
+    )
 }
