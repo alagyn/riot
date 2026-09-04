@@ -116,14 +116,14 @@ impl Riot {
         } else {
             println!("Starting service: {}", &service.name);
             let service_dir = self.get_service_dir(service);
-            runit_ctl::send_signal(&service_dir, b'd');
+            runit_ctl::send_signal(&service_dir, b'u');
         }
     }
 
     pub fn stop_service(&self, service: &Service) {
         println!("Stopping service: {}", &service.name);
         let service_dir = self.get_service_dir(service);
-        runit_ctl::send_signal(&service_dir, b'u');
+        runit_ctl::send_signal(&service_dir, b'd');
     }
 
     pub fn enable_service(&self, service: &Service) -> Result<(), String> {

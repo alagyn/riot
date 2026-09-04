@@ -46,6 +46,12 @@ pub fn get_status(service_dir: &PathBuf) -> Result<ServiceStatus, String> {
 pub fn send_signal(service_dir: &PathBuf, signal: u8) {
     let control_file = service_dir.join("supervise").join("control");
 
+    println!(
+        "Sending signal {} to {}",
+        String::from_utf8_lossy(&[signal]),
+        control_file.to_str().unwrap()
+    );
+
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .read(false)
@@ -53,5 +59,5 @@ pub fn send_signal(service_dir: &PathBuf, signal: u8) {
         .open(control_file)
         .unwrap();
 
-    f.write(&[signal]).unwrap();
+    f.write_all(&[signal]).unwrap();
 }
